@@ -1,0 +1,56 @@
+dask_addr: tcp://127.0.0.1:8786
+config_file: ingest.config
+
+pdi:
+  metadata:
+    rank: int
+    img_size: int
+    nodes: int
+    dask_address: {type: array, subtype: char, size: 40}
+    output_dir: {type: array, subtype: char, size: 40}
+  data:
+    iteration: int
+    tmp_resid: {type: array, subtype: double, size: ['$img_size', '$img_size']}
+    tmp_recon: {type: array, subtype: double, size: ['$img_size', '$img_size']}
+  plugins:
+    #mpi:
+    #trace:
+    pycall:
+      on_event:
+        precompute:
+          with: {img_size: $img_size, rank: $rank, dask_address: $dask_address, output_dir: $output_dir, nodes: $nodes}
+          exec: |
+            from deisa.dask import Bridge, get_connection_info
+
+            sdask_address = dask_address.tobytes().decode('utf-8')
+
+            print(f"precompute: dask_addr={sdask_address}, img_size={img_size}")
+
+            arrays_metadata = {
+                                 'residual': {
+                                     'size': (int(nodes), int(img_size), int(img_size)),
+                                     'subsize': (int(nodes), int(img_size), int(img_size))
+                                 },
+
+                                 'reconstruction': {
+                                     'size': (int(nodes), int(img_size), int(img_size)),
+                                     'subsize': (int(nodes), int(img_size), int(img_size))
+                                 },
+                             }
+
+            system_metadata = {
+                                'connection': get_connection_info(sdask_address),
+                                'nb_bridges': int(nodes)
+                              }
+
+            bridge = Bridge(id=rank, 
+                            arrays_metadata=arrays_metadata,
+                            system_metadata=system_metadata)
+
+        majcyc:
+          with: {img_size: $img_size, iter_id: $iteration, resid: $tmp_resid, recon: $tmp_recon, rank: $rank}
+          exec: |
+            resid = resid.reshape((1, int(img_size), int(img_size)))
+            bridge.send('residual', resid, iter_id)
+            recon = recon.reshape((1, int(img_size), int(img_size)))
+            bridge.send('reconstruction', recon, iter_id)
