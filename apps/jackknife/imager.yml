@@ -1,0 +1,108 @@
+dask_addr: tcp://127.0.0.1:8786
+config_file: ingest.config
+
+pdi:
+  metadata:
+    rank: int
+    img_size: int
+    nodes: int
+    dask_address: {type: array, subtype: char, size: 40}
+    ntime: int
+    nbaseline: int
+    nfreq: int
+    npol: int
+    sumwt: double
+  data:
+    iteration: int
+    tmp_uvw: {type: array, subtype: double, size: ['$ntime', '$nbaseline', 3]}
+    tmp_frequency: {type: array, subtype: double, size: ['$nfreq']}
+    tmp_vis: {type: array, subtype: double, size: ['$ntime', '$nbaseline', '$nfreq', '$npol * 2']}
+    tmp_flags: {type: array, subtype: int, size: ['$ntime', '$nbaseline', '$nfreq', '$npol']}
+    tmp_weight: {type: array, subtype: double, size: ['$ntime', '$nbaseline', '$nfreq', '$npol']}
+    tmp_resid: {type: array, subtype: double, size: ['$img_size', '$img_size']}
+  plugins:
+    pycall:
+      on_event:
+        precompute:
+          with: {rank: $rank, img_size: $img_size, nodes: $nodes, dask_address: $dask_address, ntime: $ntime, nbaseline: $nbaseline, nfreq: $nfreq, npol: $npol}
+          exec: |
+            from deisa.dask import Bridge, get_connection_info
+            import numpy
+
+            sdask_address = dask_address.tobytes().decode('utf-8')
+
+            print(f"precompute: dask_addr={sdask_address}, img_size={img_size}")
+
+            arrays_metadata = {
+                                'vis': {
+                                 'size': (int(nodes), int(ntime), int(nbaseline), int(nfreq), int(npol * 2)),
+                                 'subsize': (1, int(ntime), int(nbaseline), int(nfreq), int(npol))
+                                },
+
+                                'uvw_coords': {
+                                 'size': (int(nodes), 1, int(ntime), int(nbaseline), 3),
+                                 'subsize': (1, 1, int(ntime), int(nbaseline), 3)
+                                },
+
+                                'flags': {
+                                 'size': (int(nodes), int(ntime), int(nbaseline), int(nfreq), int(npol)),
+                                 'subsize': (1, int(ntime), int(nbaseline), int(nfreq), int(npol))
+                                },
+
+                                'weights': {
+                                 'size': (int(nodes), int(ntime), int(nbaseline), int(nfreq), int(npol)),
+                                 'subsize': (1, int(ntime), int(nbaseline), int(nfreq), int(npol))
+                                },
+
+                                'freqs': {
+                                 'size': (int(nodes), 1, 1, 1, 1),
+                                 'subsize': (1, 1, 1, 1, 1)
+                                },
+
+                                'sumwts': {
+                                 'size': (int(nodes),),
+                                 'subsize': (1,)
+                                },
+
+                                'residual': {
+                                     'size': (int(nodes), int(img_size), int(img_size)),
+                                     'subsize': (1, int(img_size), int(img_size))
+                                 },
+                             }
+
+            system_metadata = {
+                                'connection': get_connection_info(sdask_address),
+                                'nb_bridges': int(nodes)
+                              }
+
+            bridge = Bridge(id=rank, 
+                            arrays_metadata=arrays_metadata,
+                            system_metadata=system_metadata)
+
+        vis_share:
+          with: {vis: $tmp_vis, uvw_coords: $tmp_uvw, flags: $tmp_flags, weights: $tmp_weight, freqs: $tmp_frequency, ntime: $ntime, nbaseline: $nbaseline, nfreq: $nfreq, npol: $npol, sumwt: $sumwt}
+          exec: |
+            vis = vis.reshape((1, int(ntime), int(nbaseline), int(nfreq), int(npol * 2)))
+            bridge.send("vis", vis, 0)
+
+            uvw_coords = uvw_coords.reshape((1, 1, int(ntime), int(nbaseline), 3))
+            bridge.send("uvw_coords", uvw_coords, 0)
+
+            flags = flags.reshape((1, int(ntime), int(nbaseline), int(nfreq), int(npol)))
+            bridge.send("flags", flags, 0)
+
+            weights = weights.reshape((1, int(ntime), int(nbaseline), int(nfreq), int(npol)))
+            bridge.send("weights", weights, 0)
+
+            freqs = freqs.reshape((1, 1, 1, 1, 1))
+            bridge.send("freqs", freqs, 0)
+
+            sumwts = numpy.array([sumwt])
+            bridge.send("sumwts", sumwts, 0)
+
+        resid_share:
+          with: {img_size: $img_size, iter_id: $iteration, resid: $tmp_resid}
+          exec: |
+            resid = resid.reshape((1, int(img_size), int(img_size)))
+            bridge.send('residual', resid, iter_id)
+    
