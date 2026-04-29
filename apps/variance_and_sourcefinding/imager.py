@@ -20,148 +20,162 @@ from mpi4py import MPI
 
 from ska_sdp_func_python.image.cleaners import msclean
 from radioimaging.util import util
-from radioimaging.visibility import residual, weights
+from radioimaging.visibility import residual, weights, ingest
 from radioimaging.images import images, filters
+from radioimaging.deconvolution import deconvolve
 from casacore.tables import table
+
+import astropy.units as u
 
 pdicfg_filename = sys.argv[1]
 mscfg_filename = sys.argv[2]
 
-def recon(comm):
-    partition = comm.Get_rank()
-    nnodes = comm.Get_size()
-
-    #read pdi config
-    with open(pdicfg_filename, 'r') as pdicfgfile:
-        try:    
-            pdicfg = yaml.safe_load(pdicfgfile)
-        except yaml.YAMLError as exc:
-            exit(exc)
-
+def deconv_node(comm, mscfg, pdicfg):
     pdi.init(yaml.dump(pdicfg['pdi']))
 
-    #read reconstruction config
-    with open(mscfg_filename) as f: 
-        mscfg_data = f.read()
+    dummwt = 0
+    comm.allgather(dummwt)
 
-    mscfg = json.loads(mscfg_data)
-    
-    #dataset ingestion
-    all_datasets = mscfg["datasets"]
-    ms_name = all_datasets[partition]
-    channel_start = int(mscfg["channel_start"])
-    channel_end = int(mscfg["channel_end"])
-    data_descriptors = range(int(mscfg["data_descriptor_start"]), int(mscfg["data_descriptor_end"]) + 1)
-    bda = mscfg["bda"] if mscfg["bda"] is not None else False
-
-    #imaging
+    fista_iter = int(mscfg["nfistaiter"])
+    init_lambda_full = mscfg["init_lambda_full"]
+    nmaj = int(mscfg["nmajcycl1"])
+    wavelet_dict = mscfg["wavelet_dict"]
+    lambda_growth_steepness = mscfg["lambda_growth_steepness"]
     npixels = mscfg["npixels"]
-    cellsize = mscfg["cellsize"]
-    weighting = mscfg["weighting"]
-    robustness = mscfg["robustness"]
-    ells = mscfg["ells"]
-    ells.sort()
-    delta = mscfg["delta"]
-
-    #deconvolution
-    msc_niter = int(mscfg["msclean_iter"])
-    thresh = mscfg["clean_thresh"]
-    scales = mscfg["fullres_clean_scales"]
-    nmaj = mscfg["nmajcycmsc"] + 1
-    fracthresh = mscfg["clean_fracthresh"]
-    first_mc_scales = mscfg["first_mc_clean_scales"][partition]
-    first_mc_thresholds = mscfg.get("fracthreshs", None)
-    fmct = fracthresh if first_mc_thresholds is None else first_mc_thresholds[partition]
-    sens = None
-    gain = 0.1
-
-    #output
-    output_dir = mscfg["output_dir"] + "_pmsclean/"
 
     #convert strings needed to byte arrays for pdi
     dask_addr = pdicfg['dask_addr']
     bdask_addr = bytearray()
     bdask_addr.extend(map(ord, dask_addr))
 
-    boutput_dir = bytearray()
-    boutput_dir.extend(map(ord, output_dir))
-
     pdi.expose("img_size", npixels, pdi.OUT)
     pdi.expose("dask_address", bdask_addr, pdi.OUT)
-    pdi.expose("output_dir", boutput_dir, pdi.OUT)
-    pdi.expose("rank", partition, pdi.OUT)
-    pdi.expose("nodes", nnodes, pdi.OUT)
 
     pdi.event("precompute")
 
-    weight_grid, weight_timings, num_vis = weights.compute_weights_griddata_from_ms(ms_name, channel_start, channel_end, data_descriptors, npixels, cellsize, bda=bda)
-    psf, estimate, psf_timings, weight = residual.compute_psf_by_channel(ms_name, channel_start, channel_end, data_descriptors, npixels, cellsize, weighting, robustness=robustness, weight_grid=weight_grid, bda=bda)
-    np_psf = psf["pixels"].data[0, 0, :, :]
+    psfs = comm.gather(None, root=0)
 
-    #create filters
-    sigma2s = [1] * (len(ells) + 1)
-    frs, _, _ = filters.create_filters_mstep(np_psf.shape[-1] // 2, [delta]*len(ells), ells, sigma2s)
-    frns = [numpy.array(fr) for fr in frs]
-    fs2ds = [filters.freq1d_to_radial2d(f1d, np_psf.shape[-1])[1] for f1d in frns]
-    wgts = numpy.zeros(len(sigma2s))
+    full_psf = None
+    for curr_psf in psfs[1:]:
+        if full_psf is None:
+            full_psf = curr_psf
+        else:
+            full_psf += curr_psf
 
-    #create full psf
-    psfs = comm.allgather(np_psf)
-    wgts = comm.allgather(weight)
-    total_weight = sum(wgts)
-
-    wgts = [weight / total_weight for weight in wgts]
-
-    joint_psf = util.convolve2d(psfs[0] * wgts[0], fs2ds[0])
-    for i, currpsf in enumerate(psfs[1:]):
-        joint_psf += util.convolve2d(currpsf * wgts[i+1], fs2ds[i+1])
-
-    joint_psf = numpy.ascontiguousarray(joint_psf, dtype=numpy.float64)
-
-    barrier_start = time.time()
-    comm.Barrier()
-    barrier_end = time.time()
+    recon = numpy.zeros((1, 1, full_psf.shape[0], full_psf.shape[1]))
 
     for i in range(nmaj):
-        gc.collect()
+        residuals = comm.gather(None, root=0)
 
-        resid, resid_timings = residual.compute_residual_from_ms(estimate, ms_name, channel_start, channel_end, data_descriptors, npixels, cellsize, weighting, robustness=robustness, weight_grid=weight_grid)
+        full_resid = None
+        for curr_resid in residuals[1:]:
+            if full_resid is None:
+                full_resid = curr_resid
+            else:
+                full_resid += curr_resid
 
-        prev_estimates = None
-        if i > 0:
-            prev_estimates = comm.allgather(estimate.pixels.data[0,0,:,:])
+        pdi.multi_expose("majcyc", [("iteration", i, pdi.OUT),
+            ("tmp_recon", recon[0, 0, :, :], pdi.OUT),
+            ("tmp_resid", full_resid, pdi.OUT)])
 
-            full_residual = util.convolve2d(wgts[partition] * resid["pixels"].data[0, 0, :, :], fs2ds[partition])
-            for j, sigma2 in enumerate(sigma2s):
-                if j != partition:
-                    constraint = prev_estimates[j] - prev_estimates[partition]
-                    constraint = util.convolve2d(constraint, wgts[j] * psfs[j])
-                    constraint = util.convolve2d(constraint, fs2ds[j])
+        t = float(i) / (float(nmaj))
+        curr_lambda_mul = init_lambda_full + (1 - init_lambda_full) * ((numpy.exp(lambda_growth_steepness * t) - 1) / (numpy.exp(lambda_growth_steepness) - 1))
 
-                    full_residual += constraint
+        deconvolved = deconvolve.deconvolve_multipartition_single(full_resid, full_psf, fista_iter, curr_lambda_mul)
 
-            curr_psf = joint_psf
+        recon[0, 0, :, :] += deconvolved
+
+        comm.Bcast(recon, root=0)
+
+    residuals = comm.gather(None, root=0)
+
+    full_resid = None
+    for curr_resid in residuals[1:]:
+        if full_resid is None:
+            full_resid = curr_resid
         else:
-            full_residual = resid.pixels.data[0,0,:,:]
-            curr_psf = psf["pixels"].data[0, 0, :, :]
+            full_resid += curr_resid
 
-        gc.collect()
+    pdi.multi_expose("majcyc", [("iteration", nmaj, pdi.OUT),
+        ("tmp_recon", recon[0, 0, :, :], pdi.OUT),
+        ("tmp_resid", full_resid, pdi.OUT)])
 
-        deconvolved, _ = msclean(full_residual, joint_psf, None, sens, gain, thresh, msc_niter, first_mc_scales if i == 0 else scales, fmct if i == 0 else fracthresh)
-        estimate = images.add_to_image(estimate, deconvolved)
-
-        np_resid = resid["pixels"].data[0, 0, :, :]
-        np_estimate = estimate["pixels"].data[0, 0, :, :]
-        
-        pdi.multi_expose("majcyc", 
-            [("iteration", i, pdi.OUT),
-            ("tmp_resid", np_resid, pdi.OUT),
-            ("tmp_recon", np_estimate, pdi.OUT)])
-
-    time.sleep(5)
+    #to wait for analytics to finish, need to find a better way to do this
+    time.sleep(60)
 
     pdi.finalize()
 
+def grid_node(comm, mscfg, pdicfg):
+    #-1 because technically deconvolution is the 0th node but is not taken into account for pdi as this example only sends residuals and visibilities
+    partition = comm.Get_rank() - 1
+    nnodes = comm.Get_size() - 1
+    
+    #dataset ingestion
+    all_datasets = mscfg["datasets"]
+    assert(len(all_datasets) >= (nnodes))
+    ms_name = all_datasets[partition]
+    channel_start = int(mscfg["channel_start"])
+    channel_end = int(mscfg["channel_end"])
+    data_descriptors = range(int(mscfg["data_descriptor_start"]), int(mscfg["data_descriptor_end"]) + 1)
+
+    #imaging
+    cellsize = mscfg["cellsize"]
+    weighting = mscfg["weighting"]
+    robustness = mscfg["robustness"]
+    nmaj = int(mscfg["nmajcycl1"])
+    npixels = mscfg["npixels"]
+
+    [vis], _ = ingest.create_visibility_from_ms(ms_name, start_chan = channel_start, end_chan = channel_end, selected_dds = data_descriptors, use_weight_spec=True, flatten=False)
+    ntime, nbaseline, nfreq, npol = vis["vis"].data.shape
+
+    vis = weights.compute_weights(vis, npixels, cellsize, weighting, robustness=robustness)
+
+    sumwt = numpy.sum(vis.visibility_acc.flagged_imaging_weight.data)
+
+    psf, model, sumwt = residual.compute_psf(vis, npixels, cellsize, include_weight_and_model=True)
+
+    resid = residual.compute_residual(model, vis, npixels, cellsize)
+
+    allwts = comm.allgather(sumwt)[1:]
+    total_wt = numpy.sum(allwts)
+    corrected_wt = sumwt.item() / total_wt.item()
+
+    nppsf = psf.pixels.data[0, 0, :, :] * corrected_wt
+    npresid = resid.pixels.data[0, 0, :, :] * corrected_wt
+
+    iteration = 0
+
+    comm.gather(nppsf, root=0)
+    comm.gather(npresid, root=0)
+
+    for i in range(nmaj):
+        comm.Bcast(model.pixels.data, root=0)
+        resid = residual.compute_residual(model, vis, npixels, cellsize)
+        gc.collect()
+
+        iteration = i+1
+        npresid = resid.pixels.data[0, 0, :, :]  * corrected_wt
+
+        comm.gather(npresid, root=0)
+
 comm = MPI.COMM_WORLD
 
-recon(comm)
+#read configs
+with open(pdicfg_filename, 'r') as pdicfgfile:
+    try:    
+        pdicfg = yaml.safe_load(pdicfgfile)
+    except yaml.YAMLError as exc:
+        exit(exc)
+
+with open(mscfg_filename) as f: 
+    mscfg_data = f.read()
+
+mscfg = json.loads(mscfg_data)
+
+rank = comm.Get_rank()
+
+#run nodes, 0 for deconv, the rest for de/gridding
+if rank == 0:
+    deconv_node(comm, mscfg, pdicfg)
+else:
+    grid_node(comm, mscfg, pdicfg)

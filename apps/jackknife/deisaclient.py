@@ -37,6 +37,9 @@ def plot_stats(jackknifed_images, residuals, filename):
     for i in range(residuals.shape[0]):
         plt.scatter(x_one, residuals[i], s=0.01, marker="D", label="recon " + str(i), alpha=0.2)
 
+    plt.xlabel("x + y * width")
+    plt.ylabel("Jy/beam")
+
     plt.legend(markerscale=50)
     plt.savefig(filename, bbox_inches='tight', dpi=600)
     plt.clf()
@@ -140,21 +143,17 @@ def main():
     jackknifes_per_channel = dask.array.map_blocks(jackknife_vis, vis, uvw_coords, flags, weights, freqs, npix, pixsize_rad, num_jackknifes, sumwt, dtype=numpy.float64)
     jackknifes = jackknifes_per_channel.sum(axis=0)
 
-    print("Persisting jackknifes")
     jackknifes_persisted = deisa.client.persist(jackknifes)
 
     residual_futures = []
     for i in range(nmaj):
-        print("MC " + str(i))
         dresidual, _ = deisa.get_array("residual")
         residual_futures.append(deisa.client.compute(dresidual.sum(axis=0)))
 
-    print("getting residuals")
     residuals = numpy.zeros((len(residual_futures), npix, npix))
     for i, future in enumerate(residual_futures):
         residuals[i,:,:] = future.result().reshape((npix, npix))
 
-    print("recuperating jackknifes")
     jackknifed_images = deisa.client.compute(jackknifes_persisted).result()
 
     util.tofits(jackknifed_images, "jackknifes.fits")
@@ -164,9 +163,9 @@ def main():
 
     for i in range(residuals.shape[0]):
         curr_resid = residuals[i].reshape(1, residuals.shape[1], residuals.shape[2])
-        plot_stats(jackknifed_images, curr_resid, "plot_mc" + str(i) + ".png")
+        plot_stats(jackknifed_images, curr_resid, "results/plot_mc" + str(i) + ".png")
 
-    plot_stats(jackknifed_images, residuals, "plot_mcall.png")
+    plot_stats(jackknifed_images, residuals, "results/plot_mcall.png")
 
 if __name__ == "__main__":
     main()

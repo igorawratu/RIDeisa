@@ -1,6 +1,6 @@
 #!/bin/bash
 SIMU_NPROC=1                     # Number of simulation processes
-DASK_NB_WORKERS=5                # Number of Dask workers
+DASK_NB_WORKERS=2                # Number of Dask workers
 DASK_NB_THREAD_PER_WORKER=4      # Number of threads per Dask workers
 
 SCHEFILE=scheduler.json
@@ -38,7 +38,7 @@ sleep 1
 
 # Launch the simulation code
 echo Running Simulation 
-mpiexec -n 10 python imager.py imager.yml ingest.config
+mpiexec -n 6 python imager.py imager.yml ingest.config
 
 sleep 1
 

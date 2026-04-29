@@ -3,11 +3,8 @@ config_file: ingest.config
 
 pdi:
   metadata:
-    rank: int
     img_size: int
-    nodes: int
     dask_address: {type: array, subtype: char, size: 40}
-    output_dir: {type: array, subtype: char, size: 40}
   data:
     iteration: int
     tmp_resid: {type: array, subtype: double, size: ['$img_size', '$img_size']}
@@ -18,7 +15,7 @@ pdi:
     pycall:
       on_event:
         precompute:
-          with: {img_size: $img_size, rank: $rank, dask_address: $dask_address, output_dir: $output_dir, nodes: $nodes}
+          with: {img_size: $img_size, dask_address: $dask_address}
           exec: |
             from deisa.dask import Bridge, get_connection_info
 
@@ -28,29 +25,30 @@ pdi:
 
             arrays_metadata = {
                                  'residual': {
-                                     'size': (int(nodes), int(img_size), int(img_size)),
-                                     'subsize': (int(nodes), int(img_size), int(img_size))
+                                     'size': (1, int(img_size), int(img_size)),
+                                     'subsize': (1, int(img_size), int(img_size))
                                  },
 
                                  'reconstruction': {
-                                     'size': (int(nodes), int(img_size), int(img_size)),
-                                     'subsize': (int(nodes), int(img_size), int(img_size))
+                                     'size': (1, int(img_size), int(img_size)),
+                                     'subsize': (1, int(img_size), int(img_size))
                                  },
                              }
 
             system_metadata = {
                                 'connection': get_connection_info(sdask_address),
-                                'nb_bridges': int(nodes)
+                                'nb_bridges': 1
                               }
 
-            bridge = Bridge(id=rank, 
+            bridge = Bridge(id=0, 
                             arrays_metadata=arrays_metadata,
                             system_metadata=system_metadata)
 
         majcyc:
-          with: {img_size: $img_size, iter_id: $iteration, resid: $tmp_resid, recon: $tmp_recon, rank: $rank}
+          with: {img_size: $img_size, iter_id: $iteration, resid: $tmp_resid, recon: $tmp_recon}
           exec: |
             resid = resid.reshape((1, int(img_size), int(img_size)))
             bridge.send('residual', resid, iter_id)
+
             recon = recon.reshape((1, int(img_size), int(img_size)))
             bridge.send('reconstruction', recon, iter_id)

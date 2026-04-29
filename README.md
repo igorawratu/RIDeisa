@@ -1,8 +1,8 @@
 # RIDeisa
-Prototype on using the in situ tool Deisa with a radio-interferometric imaging pipeline
+Prototype on using the in situ tool Deisa with a radio-interferometric imaging pipeline. The largely same pipeline is used across all examples, where de/gridding is parallelized by EM-frequency across multiple nodes, after which the individual dirties and psfs and reduced, with deconvolution being performed on a single node. The deconvolution algorithm used here is a L1 regularized method using Fista. The main differences between the different pipelines are how the data is being shared with pdi/deisa.
 
-Contains a bunch of example applications on using Deisa together with a radio-interferometric pipeline. These are currently:
-1. A multi-node simulation using the SMURFIT framework (paper under review) using deisa to both estimate variance and source find on reconstructed images
-2. A multi-node simulation parallelizing de/gridding by EM frequency with deconvolution done on a separate node in serial. This uses deisa to perform jackknife resampling in order to reconstruct a population of reference residuals. It then plots the residuals of the reconstructions of different major cycles against this in a scatter plot.
+The repository contains a few example applications of using Deisa with the above pipeline:
+1. A simple case where the reconstructed and residual image is shared with deisa every major cycle. Deisa then performs source finding on the reconstructed image, and a variance estimation on the residual using a sliding window to maintain some locality.
+2. A case where visibilities are shared from each individual de/gridding node to deisa, which performs a jackknife resampling (e.g., https://www.aanda.org/articles/aa/abs/2025/03/aa51927-24/aa51927-24.html) in parallel across the different workers in order to generate a population of reference residual images. The actual residuals from the reconstructions across the different major cycles are then recuperated and plotted against this population of reference residuals in a series of scatter plots. The ideal case here is that the final residual has roughly the same distribution as the reference residual population. If it has a larger flux, it means that we are not cleaning enough, whereas a smaller flux means we are over cleaning and reconstructing noise.
 
-Datasets used currently are some test ones. The repository will be updated with a download script for some nicer ones once I get around to simulating and uploading them.
+The datasets used are simulated using RASCIL (https://developer.skao.int/projects/rascil/en/latest/).
