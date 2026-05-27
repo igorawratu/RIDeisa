@@ -6,6 +6,9 @@ import galsim
 import numpy
 from scipy.stats import qmc
 
+from radioimaging.images import images
+from radioimaging.util import util
+
 num_gal = 64
 npix = 1024
 pix_scale = 1
@@ -27,6 +30,8 @@ positions = sampler.random(num_gal) * (pos_minmax[1] - pos_minmax[0]) + pos_minm
 
 image = galsim.ImageF(npix, npix, scale=pix_scale)
 
+sources = []
+
 for i in range(num_gal):
     flux = fluxes_base[i] * 10**fluxes_pow[i]
     gal = galsim.Sersic(n=ns[i], half_light_radius=hlrs[i], flux=flux)
@@ -43,5 +48,15 @@ for i in range(num_gal):
     bounds = stamp.bounds & image.bounds
     image[bounds] += stamp[bounds]
 
+    sources.append([positions[i,0], positions[i,1], e1, e2, flux])
+
 file_name = os.path.join('galfield_gt.fits')
 image.write(file_name)
+images.to_rascil_format('galfield_gt.fits', postfix="")
+
+if os.path.exists("orig_sources.csv"):
+    os.remove("orig_sources.csv")
+    
+util.write_to_csv(["x", "y", "e1", "e2", "flux"], "orig_sources.csv")
+for j in range(len(sources)):
+    util.write_to_csv(sources[j], "orig_sources.csv")
