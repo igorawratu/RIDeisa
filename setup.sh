@@ -55,3 +55,5 @@ pip uninstall mpi4py
 spack add openmpi py-mpi4py
 spack concretize
 spack install
+
+pip install galsim

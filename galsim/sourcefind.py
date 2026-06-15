@@ -8,7 +8,7 @@ from radioimaging.util import util
 
 #uses SEP to find sources, and optionally consolidate them, as the same source can be found multiple times. The threshold in the case is in pixels and degrees
 def find_sources(model, sthresh, max_sources, consolidate=True, consolidate_thresh=(1, 2.5)):
-    output = numpy.full((max_sources, 6), -1, dtype=numpy.float32)
+    output = numpy.full((max_sources, 8), -1, dtype=numpy.float32)
 
     currmodel = model.astype(model.dtype.newbyteorder('='))
     bkg = sep.Background(currmodel)
@@ -16,6 +16,8 @@ def find_sources(model, sthresh, max_sources, consolidate=True, consolidate_thre
     objects = sep.extract(data_sub, sthresh, err=bkg.globalrms)
 
     num_sources = 0
+
+    print(objects.dtype.names)
 
     for j in range(len(objects)):
         if num_sources >= max_sources:
@@ -27,6 +29,9 @@ def find_sources(model, sthresh, max_sources, consolidate=True, consolidate_thre
         b = objects['b'][j]
         theta = objects['theta'][j]
         flux = objects['flux'][j]
+        pflux = objects['peak'][j]
+        cdist = numpy.sqrt(x**2 + y**2)
+
         deg = theta * 180. / numpy.pi
 
         matching_id = -1
@@ -35,15 +40,16 @@ def find_sources(model, sthresh, max_sources, consolidate=True, consolidate_thre
                 abs(y - output[k,1]) <= consolidate_thresh[0] and \
                 abs(a - output[k,2]) <= consolidate_thresh[0] and \
                 abs(b - output[k,3]) <= consolidate_thresh[0] and \
-                abs(deg - output[k,4]) <= consolidate_thresh[2]:
+                abs(deg - output[k,4]) <= consolidate_thresh[1]:
                     matching_id = k
                     break 
 
         if matching_id < 0:
-            output[num_sources,:] = [x, y, a, b, deg, flux]
+            output[num_sources,:] = [x, y, a, b, deg, flux, pflux, cdist]
             num_sources += 1
         else:
-            output[i, matching_id,5] += flux
+            output[matching_id,5] += flux
+            output[matching_id,6] += pflux
 
     return output, num_sources
 
@@ -77,17 +83,17 @@ def write_sources(sources, output_file):
     if os.path.exists(output_file):
         os.remove(output_file)
 
-    util.write_to_csv(["x", "y", "a", "b", "deg", "flux"], output_file)
+    util.write_to_csv(["x", "y", "a", "b", "deg", "flux", "pflux", "cdist"], output_file)
 
     for j in range(sources.shape[0]):
         if sources[j,0] < 0:
             break
 
-        util.write_to_csv([sources[j,0], sources[j,1], sources[j,2], sources[j,3], sources[j,4], sources[j,5]], output_file)
+        util.write_to_csv([sources[j,0], sources[j,1], sources[j,2], sources[j,3], sources[j,4], sources[j,5], sources[j,6], sources[j,7]], output_file)
 
 
 model = util.fromfits("galfield_gt.fits")
-sources, num_sources = find_sources(model, 10, 1000)
+sources, num_sources = find_sources(model, 3, 1000)
 plot_sources(sources, model, "sources")
 
 write_sources(sources, "sources.csv")
