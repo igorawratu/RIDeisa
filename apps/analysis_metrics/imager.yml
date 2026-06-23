@@ -1,5 +1,6 @@
 dask_addr: tcp://127.0.0.1:8786
 config_file: ingest.config
+match_threshold : 5
 
 pdi:
   metadata:
@@ -14,7 +15,7 @@ pdi:
     #trace:
     pycall:
       on_event:
-        precompute:
+        precompute_deconv:
           with: {img_size: $img_size, dask_address: $dask_address}
           exec: |
             from deisa.dask import Bridge, get_connection_info
@@ -44,7 +45,7 @@ pdi:
                             arrays_metadata=arrays_metadata,
                             system_metadata=system_metadata)
 
-        majcyc:
+        deconv_share:
           with: {img_size: $img_size, iter_id: $iteration, resid: $tmp_resid, recon: $tmp_recon}
           exec: |
             resid = resid.reshape((1, int(img_size), int(img_size)))

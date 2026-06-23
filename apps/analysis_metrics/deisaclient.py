@@ -267,7 +267,8 @@ def main():
     sthresh = mscfg["source_threshold"]
 
     gt_sources_fname = mscfg["gt_sources_fname"]
-    match_thresh = mscfg["match_threshold"]
+    
+    match_thresh = pdicfg["match_threshold"]
 
     gt_sources = util.read_csv(gt_sources_fname, separate_rows=True)[1:]
     gt_sources = [[float(x) for x in row] for row in gt_sources]
