@@ -102,6 +102,7 @@ def invert(viso, mul, uvw_coords, freq, flags, weights, npixdirty, pixsize):
 
 #gets a reference residual using jackknife resampling
 def jackknife_vis(vis, uvw_coords, flags, weights, freqs, npix, pixsize_rad, num, sumwt):
+    print("jacknifing vis")
     vis = vis.view(numpy.complex128)
 
     jackknifes = numpy.zeros((1, 1, num, npix, npix))
@@ -128,31 +129,33 @@ def main():
     nmaj = mscfg["nmajcycl1"] + 1
     npix = mscfg["npixels"]
     pixsize_rad = mscfg["cellsize"]
-    num_jackknifes = mscfg["num_jackknifes"]
 
+    num_jackknifes = pdicfg['num_jackknifes']
     deisa = Deisa(get_connection_info=lambda: get_connection_info(pdicfg['dask_addr']))
 
+    print("client getting data")
     sumwt = deisa.get_array("sumwts")[0].sum().compute()
-
+    print("client got sumwts")
     vis, _ = deisa.get_array("vis")
+    print("client got vis")
     uvw_coords, _ = deisa.get_array("uvw_coords")
+    print("client got uvw coords")
     flags, _ = deisa.get_array("flags")
+    print("client got flags")
     weights, _ = deisa.get_array("weights")
+    print("client got weights")
     freqs, _ = deisa.get_array("freqs")
+    print("client got freqs")
 
     jackknifes_per_channel = dask.array.map_blocks(jackknife_vis, vis, uvw_coords, flags, weights, freqs, npix, pixsize_rad, num_jackknifes, sumwt, dtype=numpy.float64)
     jackknifes = jackknifes_per_channel.sum(axis=0)
 
     jackknifes_persisted = deisa.client.persist(jackknifes)
 
-    residual_futures = []
+    residuals = numpy.zeros((len(nmaj), npix, npix))
     for i in range(nmaj):
         dresidual, _ = deisa.get_array("residual")
-        residual_futures.append(deisa.client.compute(dresidual.sum(axis=0)))
-
-    residuals = numpy.zeros((len(residual_futures), npix, npix))
-    for i, future in enumerate(residual_futures):
-        residuals[i,:,:] = future.result().reshape((npix, npix))
+        residuals[i,:,:] = dresidual.compute().reshape((npix, npix))
 
     jackknifed_images = deisa.client.compute(jackknifes_persisted).result()
 

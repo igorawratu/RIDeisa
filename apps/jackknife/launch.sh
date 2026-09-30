@@ -31,14 +31,14 @@ sleep 1
 
 # Launch the analytics
 echo Running analytics
-python deisaclient.py imager.yml ingest.config &
+python deisaclient.py imager.yml ../imager/ingest.config &
 analytics_pid=$!
 
 sleep 1
 
 # Launch the simulation code
 echo Running Simulation 
-mpiexec -n 6 python imager.py imager.yml ingest.config
+mpiexec -n 6 python ../imager/imager.py imager.yml ../imager/ingest.config
 
 sleep 1
 

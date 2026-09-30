@@ -49,10 +49,18 @@ def deconv_node(comm, mscfg, pdicfg):
 
     ntime = nbaseline = nfreq = npol = sumwt = 0
 
+    #initialize pdi and deisa
     pdi.expose("img_size", npixels, pdi.OUT)
     pdi.expose("dask_address", bdask_addr, pdi.OUT)
+    pdi.expose("rank", partition, pdi.OUT)
+    pdi.expose("nodes", nnodes, pdi.OUT)
+    pdi.expose("ntime", ntime, pdi.OUT)
+    pdi.expose("nbaseline", nbaseline, pdi.OUT)
+    pdi.expose("nfreq", nfreq, pdi.OUT)
+    pdi.expose("npol", npol, pdi.OUT)
+    pdi.expose("sumwt", sumwt, pdi.OUT)
 
-    pdi.event("precompute_deconv")
+    pdi.event("precompute")
 
     dummwt = 0
     comm.allgather(dummwt)
@@ -151,7 +159,7 @@ def grid_node(comm, mscfg, pdicfg):
     pdi.expose("npol", npol, pdi.OUT)
     pdi.expose("sumwt", sumwt, pdi.OUT)
 
-    pdi.event("precompute_grid")
+    pdi.event("precompute")
 
     vis_view = vis["vis"].data.view(numpy.float64)
 

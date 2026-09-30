@@ -15,7 +15,7 @@ pdi:
     #trace:
     pycall:
       on_event:
-        precompute_deconv:
+        precompute:
           with: {img_size: $img_size, dask_address: $dask_address}
           exec: |
             from deisa.dask import Bridge, get_connection_info

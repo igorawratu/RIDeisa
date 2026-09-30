@@ -1,5 +1,6 @@
 dask_addr: tcp://127.0.0.1:8786
 config_file: ingest.config
+"num_jackknifes" : 1
 
 pdi:
   metadata:
@@ -21,6 +22,7 @@ pdi:
     tmp_weight: {type: array, subtype: double, size: ['$ntime', '$nbaseline', '$nfreq', '$npol']}
     tmp_resid: {type: array, subtype: double, size: ['$img_size', '$img_size']}
   plugins:
+    #trace:
     pycall:
       on_event:
         precompute:
@@ -35,37 +37,37 @@ pdi:
 
             arrays_metadata = {
                                 'vis': {
-                                 'size': (int(nodes), int(ntime), int(nbaseline), int(nfreq), int(npol * 2)),
-                                 'subsize': (1, int(ntime), int(nbaseline), int(nfreq), int(npol))
+                                 'size': (int(nodes)-1, int(ntime), int(nbaseline), int(nfreq), int(npol * 2)),
+                                 'subsize': (1, int(ntime), int(nbaseline), int(nfreq), int(npol * 2))
                                 },
 
                                 'uvw_coords': {
-                                 'size': (int(nodes), 1, int(ntime), int(nbaseline), 3),
+                                 'size': (int(nodes)-1, 1, int(ntime), int(nbaseline), 3),
                                  'subsize': (1, 1, int(ntime), int(nbaseline), 3)
                                 },
 
                                 'flags': {
-                                 'size': (int(nodes), int(ntime), int(nbaseline), int(nfreq), int(npol)),
+                                 'size': (int(nodes)-1, int(ntime), int(nbaseline), int(nfreq), int(npol)),
                                  'subsize': (1, int(ntime), int(nbaseline), int(nfreq), int(npol))
                                 },
 
                                 'weights': {
-                                 'size': (int(nodes), int(ntime), int(nbaseline), int(nfreq), int(npol)),
+                                 'size': (int(nodes)-1, int(ntime), int(nbaseline), int(nfreq), int(npol)),
                                  'subsize': (1, int(ntime), int(nbaseline), int(nfreq), int(npol))
                                 },
 
                                 'freqs': {
-                                 'size': (int(nodes), 1, 1, 1, 1),
+                                 'size': (int(nodes)-1, 1, 1, 1, 1),
                                  'subsize': (1, 1, 1, 1, 1)
                                 },
 
                                 'sumwts': {
-                                 'size': (int(nodes),),
+                                 'size': (int(nodes)-1,),
                                  'subsize': (1,)
                                 },
 
                                 'residual': {
-                                     'size': (int(nodes), int(img_size), int(img_size)),
+                                     'size': (1, int(img_size), int(img_size)),
                                      'subsize': (1, int(img_size), int(img_size))
                                  },
                              }
@@ -80,8 +82,9 @@ pdi:
                             system_metadata=system_metadata)
 
         vis_share:
-          with: {vis: $tmp_vis, uvw_coords: $tmp_uvw, flags: $tmp_flags, weights: $tmp_weight, freqs: $tmp_frequency, ntime: $ntime, nbaseline: $nbaseline, nfreq: $nfreq, npol: $npol, sumwt: $sumwt}
+          with: {rnk: $rank, vis: $tmp_vis, uvw_coords: $tmp_uvw, flags: $tmp_flags, weights: $tmp_weight, freqs: $tmp_frequency, ntime: $ntime, nbaseline: $nbaseline, nfreq: $nfreq, npol: $npol, sumwt: $sumwt}
           exec: |
+            print("Sharing vis data")
             vis = vis.reshape((1, int(ntime), int(nbaseline), int(nfreq), int(npol * 2)))
             bridge.send("vis", vis, 0)
 
@@ -100,9 +103,8 @@ pdi:
             sumwts = numpy.array([sumwt])
             bridge.send("sumwts", sumwts, 0)
 
-        resid_share:
+        deconv_share:
           with: {img_size: $img_size, iter_id: $iteration, resid: $tmp_resid}
           exec: |
             resid = resid.reshape((1, int(img_size), int(img_size)))
             bridge.send('residual', resid, iter_id)
-    
