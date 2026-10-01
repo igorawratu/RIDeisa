@@ -62,12 +62,15 @@ def deconv_node(comm, mscfg, pdicfg):
 
     pdi.event("precompute")
 
+    print("main gathering weights")
     dummwt = 0
     comm.allgather(dummwt)
+
+    print("main gathering psfs")
     psfs = comm.gather(None, root=nnodes-1)
 
     full_psf = None
-    for curr_psf in psfs[:-1]:
+    for curr_psf in psfs[1:]:
         if full_psf is None:
             full_psf = curr_psf
         else:
@@ -78,7 +81,7 @@ def deconv_node(comm, mscfg, pdicfg):
     for i in range(nmaj):
         residuals = comm.gather(None, root=nnodes-1)
         full_resid = None
-        for curr_resid in residuals[:-1]:
+        for curr_resid in residuals[1:]:
             if full_resid is None:
                 full_resid = curr_resid
             else:
@@ -100,7 +103,7 @@ def deconv_node(comm, mscfg, pdicfg):
     residuals = comm.gather(None, root=nnodes-1)
 
     full_resid = None
-    for curr_resid in residuals[:-1]:
+    for curr_resid in residuals[1:]:
         if full_resid is None:
             full_resid = curr_resid
         else:
@@ -109,6 +112,9 @@ def deconv_node(comm, mscfg, pdicfg):
     pdi.multi_expose("deconv_share", [("iteration", nmaj, pdi.OUT),
         ("tmp_recon", recon[0, 0, :, :], pdi.OUT),
         ("tmp_resid", full_resid, pdi.OUT)])
+
+    nmaj += 1;
+    pdi.multi_expose("postcompute", [("iteration", nmaj, pdi.OUT)])
 
     time.sleep(60)
     pdi.finalize()
@@ -124,7 +130,7 @@ def grid_node(comm, mscfg, pdicfg):
     #dataset ingestion
     all_datasets = mscfg["datasets"]
     assert(len(all_datasets) >= (nnodes-1))
-    ms_name = all_datasets[partition]
+    ms_name = all_datasets[partition-1]
     channel_start = int(mscfg["channel_start"])
     channel_end = int(mscfg["channel_end"])
     data_descriptors = range(int(mscfg["data_descriptor_start"]), int(mscfg["data_descriptor_end"]) + 1)
@@ -173,11 +179,13 @@ def grid_node(comm, mscfg, pdicfg):
         ("tmp_time", vis["time"].data, pdi.OUT)
         ])
 
+    print("computing psf")
     psf, model, sumwt = residual.compute_psf(vis, npixels, cellsize, include_weight_and_model=True)
-
+    print("computing residual")
     resid = residual.compute_residual(model, vis, npixels, cellsize)
 
-    allwts = comm.allgather(sumwt)[:-1]
+    print("gathering weights")
+    allwts = comm.allgather(sumwt)[1:]
     total_wt = numpy.sum(allwts)
     corrected_wt = sumwt.item() / total_wt.item()
 
@@ -185,11 +193,13 @@ def grid_node(comm, mscfg, pdicfg):
     npresid = resid.pixels.data[0, 0, :, :] * corrected_wt
 
     iteration = 0
-
+    print("gathering psfs")
     comm.gather(nppsf, root=nnodes-1)
+    print("gathering residuals")
     comm.gather(npresid, root=nnodes-1)
 
     for i in range(nmaj):
+        print("mc " + str(i))
         comm.Bcast(model.pixels.data, root=nnodes-1)
         resid = residual.compute_residual(model, vis, npixels, cellsize)
         gc.collect()
@@ -221,7 +231,7 @@ mscfg = json.loads(mscfg_data)
 rank = comm.Get_rank()
 
 #run nodes, the last one is used for deconvolution, the rest for de/gridding
-if rank == comm.Get_size() - 1:
+if rank == 0:#comm.Get_size() - 1:
     deconv_node(comm, mscfg, pdicfg)
 else:
     grid_node(comm, mscfg, pdicfg)

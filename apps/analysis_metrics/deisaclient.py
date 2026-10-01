@@ -247,6 +247,31 @@ def write_sources(sources, output_file):
 
             util.write_to_csv([sources[i,j,0], sources[i,j,1], sources[i,j,2], sources[i,j,3], sources[i,j,4], sources[i,j,5], sources[i,j,6], sources[i,j,7]], curr_output_file)
 
+def process_recon(recon, gt_sources, sthresh, max_sources, match_thresh):
+    recon_sources = find_sources(recon, sthresh, max_sources)
+    matches = match_sources(recon_sources, gt_sources, match_thresh)
+    flux_ratios = flux_ratio(matches, recon_sources, gt_sources)
+    pflux_ratios = pflux_ratio(matches, recon_sources, gt_sources)
+    poffset_ys = pos_offset_y(matches, recon_sources, gt_sources)
+    poffset_xs = pos_offset_x(matches, recon_sources, gt_sources)
+    poffset_dists = dist_offset(matches, recon_sources, gt_sources)
+    piflux_ratios = peak_integrated_flux_ratios(matches, recon_sources, gt_sources)
+
+    i = recon.timestep
+
+    write_sources(recon_sources, "results/recon_sources_" + str(i))
+    plot_sources(recon_sources, gt_sources, matches, recon, "results/recon_sources_" + str(i))
+    plot_comparison_metrics(matches, recon_sources, gt_sources, flux_ratios, 5, "Flux Ratio", "flux_recon/flux_gt", "Jy_gt", "results/fluxratio_" + str(i))
+    plot_comparison_metrics(matches, recon_sources, gt_sources, pflux_ratios, 5, "PFlux Ratio", "pflux_recon/pflux_gt", "Jy_gt", "results/pfluxratio_" + str(i))
+    plot_comparison_metrics(matches, recon_sources, gt_sources, poffset_dists, 5, "Distance Offset", "|recon_xy - gt_xy|_2", "Jy_gt", "results/distance_offset_" + str(i))
+    plot_comparison_metrics(matches, recon_sources, gt_sources, piflux_ratios, 5, "Peak to integrated flux", "piflux_ratio_recon/piflux_ratio_gt", "Jy_gt", "results/piflux_ratio_flux_" + str(i))
+    plot_comparison_metrics(matches, recon_sources, gt_sources, piflux_ratios, 7, "Peak to integrated flux", "piflux_ratio_recon/piflux_ratio_gt", "dist_to_phasecenter", "results/piflux_ratio__dist_" + str(i))
+
+    plt.title("X Y offsets")
+    plt.scatter(poffset_xs[0], poffset_ys[0])
+    plt.savefig("results/xyoffset_" + str(i) + ".png", bbox_inches='tight', dpi=600)
+    plt.clf()
+
 def main():
     pdicfg_filename = sys.argv[1]
     pdicfg = None
@@ -273,43 +298,18 @@ def main():
     gt_sources = util.read_csv(gt_sources_fname, separate_rows=True)[1:]
     gt_sources = [[float(x) for x in row] for row in gt_sources]
 
-    deisa_client = Deisa(get_connection_info=lambda: get_connection_info(pdicfg['dask_addr']))
+    print("deisa init")
+
+    deisa_client = Deisa()
     source_futures = []
     models = []
+    print("deisa registering callbacks")
+    deisa.register_callback(lambda reconstruction: process_recon(reconstruction, gt_sources, sthresh, max_sources, match_thresh), "reconstruction")
 
-    for i in range(nmaj+1):
-        drecon, it = deisa_client.get_array("reconstruction")
-        dresid, it = deisa_client.get_array("residual")
+    print("deisa executing callbacks")
+    deisa.execute_callbacks()
 
-        #we only have a blank reconstruction if i is 0, just ignore it
-        if i > 0:
-            recon_persisted = drecon.persist()
-            drecon_sources = drecon.map_blocks(find_sources, sthresh, max_sources, dtype=numpy.float32)
-            dmatches = drecon_sources.map_blocks(match_sources, gt_sources, match_thresh, dtype=numpy.int32)
-            dflux_ratios = dask.array.map_blocks(flux_ratio, dmatches, drecon_sources, gt_sources, dtype=numpy.float32)
-            dpflux_ratios = dask.array.map_blocks(pflux_ratio, dmatches, drecon_sources, gt_sources, dtype=numpy.float32)
-            dpoffset_ys = dask.array.map_blocks(pos_offset_y, dmatches, drecon_sources, gt_sources, dtype=numpy.float32)
-            dpoffset_xs = dask.array.map_blocks(pos_offset_x, dmatches, drecon_sources, gt_sources, dtype=numpy.float32)
-            dpoffset_dists = dask.array.map_blocks(dist_offset, dmatches, drecon_sources, gt_sources, dtype=numpy.float32)
-            dpiflux_ratios = dask.array.map_blocks(peak_integrated_flux_ratios, dmatches, drecon_sources, gt_sources, dtype=numpy.float32)
-
-            model = recon_persisted.compute()
-            recon_sources, matches, flux_ratios, pflux_ratios, poffset_ys, poffset_xs, poffset_dists, piflux_ratios = \
-                dask.compute(drecon_sources, dmatches, dflux_ratios, dpflux_ratios, dpoffset_ys, dpoffset_xs, dpoffset_dists, dpiflux_ratios)
-
-            write_sources(recon_sources, "results/recon_sources_" + str(i))
-            plot_sources(recon_sources, gt_sources, matches, model, "results/recon_sources_" + str(i))
-            plot_comparison_metrics(matches, recon_sources, gt_sources, flux_ratios, 5, "Flux Ratio", "flux_recon/flux_gt", "Jy_gt", "results/fluxratio_" + str(i))
-            plot_comparison_metrics(matches, recon_sources, gt_sources, pflux_ratios, 5, "PFlux Ratio", "pflux_recon/pflux_gt", "Jy_gt", "results/pfluxratio_" + str(i))
-            plot_comparison_metrics(matches, recon_sources, gt_sources, poffset_dists, 5, "Distance Offset", "|recon_xy - gt_xy|_2", "Jy_gt", "results/distance_offset_" + str(i))
-            plot_comparison_metrics(matches, recon_sources, gt_sources, piflux_ratios, 5, "Peak to integrated flux", "piflux_ratio_recon/piflux_ratio_gt", "Jy_gt", "results/piflux_ratio_flux_" + str(i))
-            plot_comparison_metrics(matches, recon_sources, gt_sources, piflux_ratios, 7, "Peak to integrated flux", "piflux_ratio_recon/piflux_ratio_gt", "dist_to_phasecenter", "results/piflux_ratio__dist_" + str(i))
-
-            plt.title("X Y offsets")
-            plt.scatter(poffset_xs[0], poffset_ys[0])
-            plt.savefig("results/xyoffset_" + str(i) + ".png", bbox_inches='tight', dpi=600)
-            plt.clf()
-
+    print("deisa closing")
     deisa_client.close()
 
 if __name__ == "__main__":

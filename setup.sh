@@ -5,7 +5,7 @@
 #This script sets up everything in a python venv and uses some symlinks to get around things. This is not recommended but we are currently missing some spack packages
 #Will be updated once packages become available
 
-rm -r spackenv
+rm -rf spackenv
 
 spack env create ./spackenv
 spack env activate -p ./spackenv/
@@ -16,6 +16,7 @@ spack add python@3.10
 spack concretize
 spack install
 
+rm -rf pythonenv
 python -m venv create pythonenv
 
 #assumes python 3.10, needed to have pdi in the venv, update accordingly
@@ -24,11 +25,11 @@ echo $SPACK_SITE > pythonenv/lib/python3.10/site-packages/spack-pdi.pth
 
 source pythonenv/bin/activate
 
-rm -r radio-imaging
+rm -rf radio-imaging
 
 git clone https://github.com/simon-prunet/radio-imaging
 cd radio-imaging
-rm -r external_dependencies
+rm -rf external_dependencies
 mkdir external_dependencies
 
 cd external_dependencies
@@ -48,8 +49,6 @@ cd ../../
 pip install -r requirements.txt
 pip install -e .
 
-pip install deisa
-
 #need to use spack version of mpi
 pip uninstall mpi4py
 spack add openmpi py-mpi4py
@@ -57,3 +56,12 @@ spack concretize
 spack install
 
 pip install galsim
+pip install deisa-core
+pip install sep
+
+cd ../
+rm -rf deisa-dask
+git clone https://github.com/deisa-project/deisa-dask.git
+cd deisa-dask
+pip install -e .
+cd ../

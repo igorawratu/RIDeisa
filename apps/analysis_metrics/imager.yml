@@ -4,6 +4,8 @@ match_threshold : 5
 
 pdi:
   metadata:
+    rank: int
+    nodes: int
     img_size: int
     dask_address: {type: array, subtype: char, size: 40}
   data:
@@ -16,7 +18,7 @@ pdi:
     pycall:
       on_event:
         precompute:
-          with: {img_size: $img_size, dask_address: $dask_address}
+          with: {img_size: $img_size, rank: $rank, nodes: $nodes, dask_address: $dask_address}
           exec: |
             from deisa.dask import Bridge, get_connection_info
 
@@ -24,32 +26,35 @@ pdi:
 
             print(f"precompute: dask_addr={sdask_address}, img_size={img_size}")
 
-            arrays_metadata = {
-                                 'residual': {
-                                     'size': (1, int(img_size), int(img_size)),
-                                     'subsize': (1, int(img_size), int(img_size))
-                                 },
+            if rank == 0:
+              print("init arrays metadata")
+              arrays_metadata = {
+                                   'reconstruction': {
+                                       'global_shape': (1, int(img_size), int(img_size)),
+                                       'chunk_shape': (1, int(img_size), int(img_size)),
+                                       'chunk_position': (0,0,0)
+                                   },
+                               }
+              # print("init systems metadata")
+              # system_metadata = {
+              #                     'connection': get_connection_info(sdask_address),
+              #                     'nb_bridges': 1
+              #                   }
 
-                                 'reconstruction': {
-                                     'size': (1, int(img_size), int(img_size)),
-                                     'subsize': (1, int(img_size), int(img_size))
-                                 },
-                             }
+              print("creating bridge")
+              comm = MPI.COMM_WORLD
+              bridge = Bridge(comm=comm, 
+                              arrays_metadata=arrays_metadata)
 
-            system_metadata = {
-                                'connection': get_connection_info(sdask_address),
-                                'nb_bridges': 1
-                              }
-
-            bridge = Bridge(id=0, 
-                            arrays_metadata=arrays_metadata,
-                            system_metadata=system_metadata)
+              print("creating bridge ok")
 
         deconv_share:
-          with: {img_size: $img_size, iter_id: $iteration, resid: $tmp_resid, recon: $tmp_recon}
+          with: {img_size: $img_size, iter_id: $iteration, recon: $tmp_recon, resid: $tmp_resid}
           exec: |
-            resid = resid.reshape((1, int(img_size), int(img_size)))
-            bridge.send('residual', resid, iter_id)
-
             recon = recon.reshape((1, int(img_size), int(img_size)))
-            bridge.send('reconstruction', recon, iter_id)
+            bridge.send('reconstruction', recon, timestep=iter_id)
+
+        postcompute:
+          with: {iter_id: $iteration}
+          exec: |
+            bridge.close(timestep=iter_id)
