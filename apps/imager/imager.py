@@ -62,12 +62,10 @@ def deconv_node(comm, mscfg, pdicfg):
 
     pdi.event("precompute")
 
-    print("main gathering weights")
     dummwt = 0
     comm.allgather(dummwt)
 
-    print("main gathering psfs")
-    psfs = comm.gather(None, root=nnodes-1)
+    psfs = comm.gather(None, root=0)
 
     full_psf = None
     for curr_psf in psfs[1:]:
@@ -79,16 +77,13 @@ def deconv_node(comm, mscfg, pdicfg):
     recon = numpy.zeros((1, 1, full_psf.shape[0], full_psf.shape[1]))
 
     for i in range(nmaj):
-        residuals = comm.gather(None, root=nnodes-1)
-        full_resid = None
+        residuals = comm.gather(None, root=0)
+        full_resid = numpy.zeros(residuals[1].shape)
         for curr_resid in residuals[1:]:
-            if full_resid is None:
-                full_resid = curr_resid
-            else:
-                full_resid += curr_resid
+            full_resid += curr_resid
 
         pdi.multi_expose("deconv_share", [("iteration", i, pdi.OUT),
-            ("tmp_recon", recon[0, 0, :, :], pdi.OUT),
+            ("tmp_recon", recon, pdi.OUT),
             ("tmp_resid", full_resid, pdi.OUT)])
 
         t = float(i) / (float(nmaj))
@@ -98,9 +93,9 @@ def deconv_node(comm, mscfg, pdicfg):
 
         recon[0, 0, :, :] += deconvolved
 
-        comm.Bcast(recon, root=nnodes-1)
+        comm.Bcast(recon, root=0)
 
-    residuals = comm.gather(None, root=nnodes-1)
+    residuals = comm.gather(None, root=0)
 
     full_resid = None
     for curr_resid in residuals[1:]:
@@ -179,12 +174,9 @@ def grid_node(comm, mscfg, pdicfg):
         ("tmp_time", vis["time"].data, pdi.OUT)
         ])
 
-    print("computing psf")
     psf, model, sumwt = residual.compute_psf(vis, npixels, cellsize, include_weight_and_model=True)
-    print("computing residual")
     resid = residual.compute_residual(model, vis, npixels, cellsize)
 
-    print("gathering weights")
     allwts = comm.allgather(sumwt)[1:]
     total_wt = numpy.sum(allwts)
     corrected_wt = sumwt.item() / total_wt.item()
@@ -193,21 +185,18 @@ def grid_node(comm, mscfg, pdicfg):
     npresid = resid.pixels.data[0, 0, :, :] * corrected_wt
 
     iteration = 0
-    print("gathering psfs")
-    comm.gather(nppsf, root=nnodes-1)
-    print("gathering residuals")
-    comm.gather(npresid, root=nnodes-1)
+    comm.gather(nppsf, root=0)
+    comm.gather(npresid, root=0)
 
     for i in range(nmaj):
-        print("mc " + str(i))
-        comm.Bcast(model.pixels.data, root=nnodes-1)
+        comm.Bcast(model.pixels.data, root=0)
         resid = residual.compute_residual(model, vis, npixels, cellsize)
         gc.collect()
 
         iteration = i+1
         npresid = resid.pixels.data[0, 0, :, :]  * corrected_wt
 
-        comm.gather(npresid, root=nnodes-1)
+        comm.gather(npresid, root=0)
 
 #to wait for analytics to finish, need to find a better way to do this
     time.sleep(60)

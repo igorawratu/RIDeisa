@@ -21,6 +21,7 @@ pdi:
           with: {img_size: $img_size, rank: $rank, nodes: $nodes, dask_address: $dask_address}
           exec: |
             from deisa.dask import Bridge, get_connection_info
+            import numpy as np
 
             sdask_address = dask_address.tobytes().decode('utf-8')
 
@@ -32,29 +33,21 @@ pdi:
                                    'reconstruction': {
                                        'global_shape': (1, int(img_size), int(img_size)),
                                        'chunk_shape': (1, int(img_size), int(img_size)),
-                                       'chunk_position': (0,0,0)
+                                       'chunk_position': (0, 0, 0)
                                    },
                                }
-              # print("init systems metadata")
-              # system_metadata = {
-              #                     'connection': get_connection_info(sdask_address),
-              #                     'nb_bridges': 1
-              #                   }
 
-              print("creating bridge")
-              comm = MPI.COMM_WORLD
+              comm = MPI.COMM_SELF
               bridge = Bridge(comm=comm, 
                               arrays_metadata=arrays_metadata)
 
-              print("creating bridge ok")
-
         deconv_share:
-          with: {img_size: $img_size, iter_id: $iteration, recon: $tmp_recon, resid: $tmp_resid}
+          with: {img_size: $img_size, iter_id: $iteration, recon: $tmp_recon}
           exec: |
             recon = recon.reshape((1, int(img_size), int(img_size)))
-            bridge.send('reconstruction', recon, timestep=iter_id)
+            bridge.send("reconstruction", recon, timestep=int(iter_id))
 
         postcompute:
           with: {iter_id: $iteration}
           exec: |
-            bridge.close(timestep=iter_id)
+            bridge.close(timestep=int(iter_id))
