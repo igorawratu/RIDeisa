@@ -112,6 +112,9 @@ def deconv_node(comm, mscfg, pdicfg):
     pdi.multi_expose("postcompute", [("iteration", nmaj, pdi.OUT)])
 
     time.sleep(60)
+
+    pdi.expose("iteration", nmaj, pdi.OUT)
+    pdi.event("postcompute")
     pdi.finalize()
 
 
@@ -201,6 +204,8 @@ def grid_node(comm, mscfg, pdicfg):
 #to wait for analytics to finish, need to find a better way to do this
     time.sleep(60)
 
+    pdi.expose("iteration", nmaj, pdi.OUT)
+    pdi.event("postcompute")
     pdi.finalize()
 
 comm = MPI.COMM_WORLD

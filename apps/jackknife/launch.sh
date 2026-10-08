@@ -5,11 +5,15 @@ DASK_NB_THREAD_PER_WORKER=4      # Number of threads per Dask workers
 
 SCHEFILE=scheduler.json
 
+export DEISA_DASK_SCHEDULER_ADDRESS="tcp://localhost:8786"
+
 # Launch Dask Scheduler in a 1 Node and save the connection information in $SCHEFILE
 echo launching Scheduler
-dask scheduler \
-    --interface lo \
-    --scheduler-file=$SCHEFILE &
+mpirun -np 1 dask scheduler \
+    --scheduler-file=$SCHEFILE \
+    --protocol tcp \
+    --host localhost \
+    --port '8786' &
 dask_sch_pid=$!
 
 # Wait for the SCHEFILE to be created 
@@ -19,11 +23,7 @@ while ! [ -f $SCHEFILE ]; do
 done
 
 echo Scheduler booted, launching workers
-dask worker \
-    --interface lo \
-    --nworkers ${DASK_NB_WORKERS} \
-    --nthreads ${DASK_NB_THREAD_PER_WORKER} \
-    --local-directory /tmp \
+mpirun -np 1 dask worker \
     --scheduler-file=${SCHEFILE} &  
 dask_worker_pid=$!
 
@@ -31,22 +31,15 @@ sleep 1
 
 # Launch the analytics
 echo Running analytics
-python deisaclient.py imager.yml ../imager/ingest.config &
+mpirun -np 1 python deisaclient.py imager.yml ../imager/ingest.config &
 analytics_pid=$!
 
 sleep 1
 
 # Launch the simulation code
 echo Running Simulation 
-mpiexec -n 6 python ../imager/imager.py imager.yml ../imager/ingest.config
+mpirun -np 6 python ../imager/imager.py imager.yml ../imager/ingest.config
 
 sleep 1
 
-while true; do
-    if kill -0 ${dask_sch_pid} 2>/dev/null; then
-        kill -9 ${dask_worker_pid} ${dask_sch_pid}
-        break
-    fi
-
-    sleep 5
-done
+kill -9 ${dask_worker_pid} ${dask_sch_pid}

@@ -131,38 +131,30 @@ def main():
     pixsize_rad = mscfg["cellsize"]
 
     num_jackknifes = pdicfg['num_jackknifes']
-    deisa = Deisa(get_connection_info=lambda: get_connection_info(pdicfg['dask_addr']))
+    deisa = Deisa()
 
-    print("client getting data")
-    sumwt = deisa.get_array("sumwts")[0].sum().compute()
-    print("client got sumwts")
-    vis, _ = deisa.get_array("vis")
-    print("client got vis")
-    uvw_coords, _ = deisa.get_array("uvw_coords")
-    print("client got uvw coords")
-    flags, _ = deisa.get_array("flags")
-    print("client got flags")
-    weights, _ = deisa.get_array("weights")
-    print("client got weights")
-    freqs, _ = deisa.get_array("freqs")
-    print("client got freqs")
+    jackknifes_persisted = None
+    residuals = numpy.zeros((nmaj, npix, npix))
 
-    jackknifes_per_channel = dask.array.map_blocks(jackknife_vis, vis, uvw_coords, flags, weights, freqs, npix, pixsize_rad, num_jackknifes, sumwt, dtype=numpy.float64)
-    jackknifes = jackknifes_per_channel.sum(axis=0)
+    @deisa.register("sumwts", "vis", "uvw_coords", "flags", "weights", "freqs")
+    def process_vis(sumwts, vis, uvw_coords, flags, weights, freqs):
+        sumwt = sumwts[-1].sum().compute()
 
-    jackknifes_persisted = deisa.client.persist(jackknifes)
+        jackknifes_per_channel = dask.array.map_blocks(jackknife_vis[-1], vis[-1], uvw_coords[-1], flags[-1], weights[-1], freqs[-1], npix, pixsize_rad, num_jackknifes, sumwt, dtype=numpy.float64)
+        jackknifes = jackknifes_per_channel.sum(axis=0)
 
-    residuals = numpy.zeros((len(nmaj), npix, npix))
-    for i in range(nmaj):
-        dresidual, _ = deisa.get_array("residual")
-        residuals[i,:,:] = dresidual.compute().reshape((npix, npix))
+        jackknifes_persisted = deisa.client.persist(jackknifes)
+
+    @deisa.register("residual")
+    def process_resid(residual):
+        residuals[residual[-1].timestep,:,:] = residual[-1].compute().reshape((npix, npix))
+
+    deisa.execute_callbacks()
 
     jackknifed_images = deisa.client.compute(jackknifes_persisted).result()
 
     util.tofits(jackknifed_images, "jackknifes.fits")
     util.tofits(residuals, "residuals.fits")
-
-    deisa.close()
 
     for i in range(residuals.shape[0]):
         curr_resid = residuals[i].reshape(1, residuals.shape[1], residuals.shape[2])

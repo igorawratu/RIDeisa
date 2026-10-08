@@ -29,82 +29,103 @@ pdi:
           with: {rank: $rank, img_size: $img_size, nodes: $nodes, dask_address: $dask_address, ntime: $ntime, nbaseline: $nbaseline, nfreq: $nfreq, npol: $npol}
           exec: |
             from deisa.dask import Bridge, get_connection_info
+            from mpi4py import MPI
             import numpy
 
             sdask_address = dask_address.tobytes().decode('utf-8')
 
             print(f"precompute: dask_addr={sdask_address}, img_size={img_size}")
 
-            arrays_metadata = {
-                                'vis': {
-                                 'size': (int(nodes)-1, int(ntime), int(nbaseline), int(nfreq), int(npol * 2)),
-                                 'subsize': (1, int(ntime), int(nbaseline), int(nfreq), int(npol * 2))
-                                },
+            arrays_metadata = None
+            comm = None
 
-                                'uvw_coords': {
-                                 'size': (int(nodes)-1, 1, int(ntime), int(nbaseline), 3),
-                                 'subsize': (1, 1, int(ntime), int(nbaseline), 3)
-                                },
+            if rank > 0:
+              arrays_metadata = {
+                'vis': {
+                 'global_shape': (int(nodes)-1, int(ntime), int(nbaseline), int(nfreq), int(npol * 2)),
+                 'chunk_shape': (1, int(ntime), int(nbaseline), int(nfreq), int(npol * 2)),
+                 'chunk_position': (int(rank-1), 0, 0, 0, 0)
+                },
 
-                                'flags': {
-                                 'size': (int(nodes)-1, int(ntime), int(nbaseline), int(nfreq), int(npol)),
-                                 'subsize': (1, int(ntime), int(nbaseline), int(nfreq), int(npol))
-                                },
+                'uvw_coords': {
+                 'global_shape': (int(nodes)-1, 1, int(ntime), int(nbaseline), 3),
+                 'chunk_shape': (1, 1, int(ntime), int(nbaseline), 3),
+                 'chunk_position': (int(rank-1), 0, 0, 0, 0)
+                },
 
-                                'weights': {
-                                 'size': (int(nodes)-1, int(ntime), int(nbaseline), int(nfreq), int(npol)),
-                                 'subsize': (1, int(ntime), int(nbaseline), int(nfreq), int(npol))
-                                },
+                'flags': {
+                 'global_shape': (int(nodes)-1, int(ntime), int(nbaseline), int(nfreq), int(npol)),
+                 'chunk_shape': (1, int(ntime), int(nbaseline), int(nfreq), int(npol)),
+                 'chunk_position': (int(rank-1), 0, 0, 0, 0)
+                },
 
-                                'freqs': {
-                                 'size': (int(nodes)-1, 1, 1, 1, 1),
-                                 'subsize': (1, 1, 1, 1, 1)
-                                },
+                'weights': {
+                 'global_shape': (int(nodes)-1, int(ntime), int(nbaseline), int(nfreq), int(npol)),
+                 'chunk_shape': (1, int(ntime), int(nbaseline), int(nfreq), int(npol)),
+                 'chunk_position': (int(rank-1), 0, 0, 0, 0)
+                },
 
-                                'sumwts': {
-                                 'size': (int(nodes)-1,),
-                                 'subsize': (1,)
-                                },
+                'freqs': {
+                 'global_shape': (int(nodes)-1, 1, 1, 1, 1),
+                 'chunk_shape': (1, 1, 1, 1, 1),
+                 'chunk_position': (int(rank-1), 0, 0, 0, 0)
+                },
 
-                                'residual': {
-                                     'size': (1, int(img_size), int(img_size)),
-                                     'subsize': (1, int(img_size), int(img_size))
-                                 },
-                             }
+                'sumwts': {
+                 'global_shape': (int(nodes)-1,),
+                 'chunk_shape': (1,),
+                 'chunk_position': (int(rank-1),)
+                },
+              }
 
-            system_metadata = {
-                                'connection': get_connection_info(sdask_address),
-                                'nb_bridges': int(nodes)
-                              }
+              world = MPI.COMM_WORLD
+              group = world.Get_group()
 
-            bridge = Bridge(id=rank, 
-                            arrays_metadata=arrays_metadata,
-                            system_metadata=system_metadata)
+              degridding_ranks = [x + 1 for x in range(int(nodes) - 1)]
+              degridding_group = group.Incl(degridding_ranks)
+              comm = world.Create_group(degridding_group)
+
+            else:
+              arrays_metadata = {
+                'residual': {
+                     'global_shape': (1, int(img_size), int(img_size)),
+                     'chunk_shape': (1, int(img_size), int(img_size)),
+                     'chunk_position': (0, 0, 0)
+                }
+              }
+
+              comm = MPI.COMM_SELF
+
+            bridge = Bridge(comm=comm, arrays_metadata=arrays_metadata)
 
         vis_share:
-          with: {rnk: $rank, vis: $tmp_vis, uvw_coords: $tmp_uvw, flags: $tmp_flags, weights: $tmp_weight, freqs: $tmp_frequency, ntime: $ntime, nbaseline: $nbaseline, nfreq: $nfreq, npol: $npol, sumwt: $sumwt}
+          with: {rnk: $rank, img_size: $img_size, vis: $tmp_vis, uvw_coords: $tmp_uvw, flags: $tmp_flags, weights: $tmp_weight, freqs: $tmp_frequency, ntime: $ntime, nbaseline: $nbaseline, nfreq: $nfreq, npol: $npol, sumwt: $sumwt}
           exec: |
-            print("Sharing vis data")
             vis = vis.reshape((1, int(ntime), int(nbaseline), int(nfreq), int(npol * 2)))
-            bridge.send("vis", vis, 0)
+            bridge.send("vis", vis, timestep=0)
 
             uvw_coords = uvw_coords.reshape((1, 1, int(ntime), int(nbaseline), 3))
-            bridge.send("uvw_coords", uvw_coords, 0)
+            bridge.send("uvw_coords", uvw_coords, timestep=0)
 
             flags = flags.reshape((1, int(ntime), int(nbaseline), int(nfreq), int(npol)))
-            bridge.send("flags", flags, 0)
+            bridge.send("flags", flags, timestep=0)
 
             weights = weights.reshape((1, int(ntime), int(nbaseline), int(nfreq), int(npol)))
-            bridge.send("weights", weights, 0)
+            bridge.send("weights", weights, timestep=0)
 
             freqs = freqs.reshape((1, 1, 1, 1, 1))
-            bridge.send("freqs", freqs, 0)
+            bridge.send("freqs", freqs, timestep=0)
 
             sumwts = numpy.array([sumwt])
-            bridge.send("sumwts", sumwts, 0)
+            bridge.send("sumwts", sumwts, timestep=0)
 
         deconv_share:
           with: {img_size: $img_size, iter_id: $iteration, resid: $tmp_resid}
           exec: |
             resid = resid.reshape((1, int(img_size), int(img_size)))
-            bridge.send('residual', resid, iter_id)
+            bridge.send('residual', resid, timestep=int(iter_id))
+
+        postcompute:
+          with: {iter_id: $iteration}
+          exec: |
+            bridge.close(timestep=int(iter_id))

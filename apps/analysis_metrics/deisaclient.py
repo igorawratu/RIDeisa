@@ -117,7 +117,7 @@ def peak_integrated_flux_ratios(matches, recon_sources, gt_sources):
 
     return peak_integrated_flux_ratios
 
-def plot_comparison_metrics(matches, recon_sources, gt_sources, match_stats, y_axis, title, xax_title, yax_title, output_filename):
+def plot_comparison_metrics(matches, recon_sources, gt_sources, match_stats, y_axis, title, xax_title, yax_title, output_filename, xlimits=None, ylimits=None):
     ymin = 9999999
     ymax = -9999999
 
@@ -129,6 +129,11 @@ def plot_comparison_metrics(matches, recon_sources, gt_sources, match_stats, y_a
 
         yvals.append(gt_sources[matches[0,i,1]][y_axis])
 
+
+    if ylimits is not None:
+        ymax = ylimits[1]
+        ymin = ylimits[0]
+
     padding = (ymax - ymin) * 0.1
 
     plt.title(title)
@@ -136,6 +141,9 @@ def plot_comparison_metrics(matches, recon_sources, gt_sources, match_stats, y_a
     plt.ylabel(yax_title)
     plt.scatter(match_stats[0,:], yvals)
     plt.ylim(ymin - padding, ymax + padding)
+
+    if xlimits is not None:
+        plt.xlim(xlimits[0], xlimits[1])
 
     plt.savefig(output_filename + ".png", bbox_inches='tight', dpi=600)
     plt.clf()
@@ -300,14 +308,16 @@ def main():
 
             write_sources(recon_sources, "results/recon_sources_" + str(i))
             plot_sources(recon_sources, gt_sources, matches, model, "results/recon_sources_" + str(i))
-            plot_comparison_metrics(matches, recon_sources, gt_sources, flux_ratios, 5, "Flux Ratio", "flux_recon/flux_gt", "Jy_gt", "results/fluxratio_" + str(i))
-            plot_comparison_metrics(matches, recon_sources, gt_sources, pflux_ratios, 5, "PFlux Ratio", "pflux_recon/pflux_gt", "Jy_gt", "results/pfluxratio_" + str(i))
-            plot_comparison_metrics(matches, recon_sources, gt_sources, poffset_dists, 5, "Distance Offset", "|recon_xy - gt_xy|_2", "Jy_gt", "results/distance_offset_" + str(i))
-            plot_comparison_metrics(matches, recon_sources, gt_sources, piflux_ratios, 5, "Peak to integrated flux", "piflux_ratio_recon/piflux_ratio_gt", "Jy_gt", "results/piflux_ratio_flux_" + str(i))
-            plot_comparison_metrics(matches, recon_sources, gt_sources, piflux_ratios, 7, "Peak to integrated flux", "piflux_ratio_recon/piflux_ratio_gt", "dist_to_phasecenter", "results/piflux_ratio__dist_" + str(i))
+            plot_comparison_metrics(matches, recon_sources, gt_sources, flux_ratios, 5, "Flux Ratio", "flux_recon/flux_gt", "Jy_gt", "results/fluxratio_" + str(i), xlimits=(0,1.2), ylimits=(0,80))
+            plot_comparison_metrics(matches, recon_sources, gt_sources, pflux_ratios, 5, "PFlux Ratio", "pflux_recon/pflux_gt", "Jy_gt", "results/pfluxratio_" + str(i), xlimits=(0,1.2), ylimits=(0,80))
+            plot_comparison_metrics(matches, recon_sources, gt_sources, poffset_dists, 5, "Distance Offset", "|recon_xy - gt_xy|_2", "Jy_gt", "results/distance_offset_" + str(i), xlimits=(0,5), ylimits=(0,80))
+            plot_comparison_metrics(matches, recon_sources, gt_sources, piflux_ratios, 5, "Peak to integrated flux", "piflux_ratio_recon/piflux_ratio_gt", "Jy_gt", "results/piflux_ratio_flux_" + str(i), xlimits=(0,50), ylimits=(0,80))
+            plot_comparison_metrics(matches, recon_sources, gt_sources, piflux_ratios, 7, "Peak to integrated flux", "piflux_ratio_recon/piflux_ratio_gt", "dist_to_phasecenter", "results/piflux_ratio__dist_" + str(i), xlimits=(0,50), ylimits=(0,1300))
 
             plt.title("X Y offsets")
             plt.scatter(poffset_xs[0], poffset_ys[0])
+            plt.xlim(-5, 5)
+            plt.ylim(-5, 5)
             plt.savefig("results/xyoffset_" + str(i) + ".png", bbox_inches='tight', dpi=600)
             plt.clf()
 
