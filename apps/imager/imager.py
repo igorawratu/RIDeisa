@@ -31,36 +31,10 @@ pdicfg_filename = sys.argv[1]
 mscfg_filename = sys.argv[2]
 
 def deconv_node(comm, mscfg, pdicfg):
-    partition = comm.Get_rank()
-    nnodes = comm.Get_size()
-
-    pdi.init(yaml.dump(pdicfg['pdi']))
-
-    fista_iter = int(mscfg["nfistaiter"])
+    nfista_iter = int(mscfg["nfistaiter"])
     init_lambda_full = mscfg["init_lambda_full"]
     nmaj = int(mscfg["nmajcycl1"])
-    wavelet_dict = mscfg["wavelet_dict"]
     lambda_growth_steepness = mscfg["lambda_growth_steepness"]
-    npixels = mscfg["npixels"]
-
-    dask_addr = pdicfg['dask_addr']
-    bdask_addr = bytearray()
-    bdask_addr.extend(map(ord, dask_addr))
-
-    ntime = nbaseline = nfreq = npol = sumwt = 0
-
-    #initialize pdi and deisa
-    pdi.expose("img_size", npixels, pdi.OUT)
-    pdi.expose("dask_address", bdask_addr, pdi.OUT)
-    pdi.expose("rank", partition, pdi.OUT)
-    pdi.expose("nodes", nnodes, pdi.OUT)
-    pdi.expose("ntime", ntime, pdi.OUT)
-    pdi.expose("nbaseline", nbaseline, pdi.OUT)
-    pdi.expose("nfreq", nfreq, pdi.OUT)
-    pdi.expose("npol", npol, pdi.OUT)
-    pdi.expose("sumwt", sumwt, pdi.OUT)
-
-    pdi.event("precompute")
 
     dummwt = 0
     comm.allgather(dummwt)
@@ -77,45 +51,23 @@ def deconv_node(comm, mscfg, pdicfg):
     recon = numpy.zeros((1, 1, full_psf.shape[0], full_psf.shape[1]))
 
     for i in range(nmaj):
+        print("deconv " + str(i))
         residuals = comm.gather(None, root=0)
         full_resid = numpy.zeros(residuals[1].shape)
         for curr_resid in residuals[1:]:
             full_resid += curr_resid
 
-        pdi.multi_expose("deconv_share", [("iteration", i, pdi.OUT),
-            ("tmp_recon", recon, pdi.OUT),
-            ("tmp_resid", full_resid, pdi.OUT)])
-
         t = float(i) / (float(nmaj))
         curr_lambda_mul = init_lambda_full + (1 - init_lambda_full) * ((numpy.exp(lambda_growth_steepness * t) - 1) / (numpy.exp(lambda_growth_steepness) - 1))
 
-        deconvolved = deconvolve.deconvolve_multipartition_single(full_resid, full_psf, fista_iter, curr_lambda_mul)
+        deconvolved = deconvolve.deconvolve_multipartition_single(full_resid, full_psf, nfista_iter, curr_lambda_mul)
 
         recon[0, 0, :, :] += deconvolved
-
         comm.Bcast(recon, root=0)
 
     residuals = comm.gather(None, root=0)
 
-    full_resid = None
-    for curr_resid in residuals[1:]:
-        if full_resid is None:
-            full_resid = curr_resid
-        else:
-            full_resid += curr_resid
-
-    pdi.multi_expose("deconv_share", [("iteration", nmaj, pdi.OUT),
-        ("tmp_recon", recon[0, 0, :, :], pdi.OUT),
-        ("tmp_resid", full_resid, pdi.OUT)])
-
-    nmaj += 1;
-    pdi.multi_expose("postcompute", [("iteration", nmaj, pdi.OUT)])
-
     time.sleep(60)
-
-    pdi.expose("iteration", nmaj, pdi.OUT)
-    pdi.event("postcompute")
-    pdi.finalize()
 
 
 def grid_node(comm, mscfg, pdicfg):
@@ -189,23 +141,35 @@ def grid_node(comm, mscfg, pdicfg):
 
     iteration = 0
     comm.gather(nppsf, root=0)
-    comm.gather(npresid, root=0)
+    residuals = comm.gather(npresid, root=0)
+
+    pdi.multi_expose("residual_share", [("iteration", 0, pdi.OUT),
+        ("tmp_resid", npresid, pdi.OUT)])
 
     for i in range(nmaj):
+        print("degrid " + str(i))
         comm.Bcast(model.pixels.data, root=0)
+        pdi.multi_expose("recon_share", [("iteration", i, pdi.OUT),
+            ("tmp_recon", model.pixels.data, pdi.OUT)])
+
         resid = residual.compute_residual(model, vis, npixels, cellsize)
         gc.collect()
 
         iteration = i+1
         npresid = resid.pixels.data[0, 0, :, :]  * corrected_wt
+        residuals = comm.gather(npresid, root=0)
 
-        comm.gather(npresid, root=0)
+        pdi.multi_expose("residual_share", [("iteration", iteration, pdi.OUT),
+            ("tmp_resid", npresid, pdi.OUT)])
 
-#to wait for analytics to finish, need to find a better way to do this
+    pdi.multi_expose("recon_share", [("iteration", i, pdi.OUT),
+        ("tmp_recon", model.pixels.data, pdi.OUT)])
+
+    pdi.multi_expose("postcompute", [("iteration", nmaj, pdi.OUT)])
+
+    #to wait for analytics to finish, need to find a better way to do this
     time.sleep(60)
 
-    pdi.expose("iteration", nmaj, pdi.OUT)
-    pdi.event("postcompute")
     pdi.finalize()
 
 comm = MPI.COMM_WORLD

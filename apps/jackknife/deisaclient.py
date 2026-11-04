@@ -60,6 +60,7 @@ def invert(viso, mul, uvw_coords, freq, flags, weights, npixdirty, pixsize):
     opf = tpf = PolarisationFrame("stokesI")
 
     ms = convert_pol_frame(ms, opf, tpf, polaxis=2).astype("c16")
+
     fuvw = copy.deepcopy(uvw_coords)
     fuvw = fuvw.reshape([nrows * nbaselines, 3])
     # We need to flip the u and w axes.
@@ -102,15 +103,20 @@ def invert(viso, mul, uvw_coords, freq, flags, weights, npixdirty, pixsize):
 
 #gets a reference residual using jackknife resampling
 def jackknife_vis(vis, uvw_coords, flags, weights, freqs, npix, pixsize_rad, num, sumwt):
-    print("jacknifing vis")
+    if vis.shape[0] == 0:
+        return numpy.zeros((0, 0, 0, 0, 0))
+
     vis = vis.view(numpy.complex128)
 
     jackknifes = numpy.zeros((1, 1, num, npix, npix))
 
     for i in range(num):
+        print("jacknifing vis " + str(i))
         mul = numpy.random.choice([-1, 1], size=vis.shape)
         jackknifes[0,0,i,:,:] = invert(vis[0], mul[0], uvw_coords[0,0,...], freqs[0,0,0,0,:], flags[0], weights[0], npix, pixsize_rad) / sumwt
         gc.collect()
+
+    print("finished jackknifing")
 
     return jackknifes
 
@@ -133,34 +139,35 @@ def main():
     num_jackknifes = pdicfg['num_jackknifes']
     deisa = Deisa()
 
-    jackknifes_persisted = None
     residuals = numpy.zeros((nmaj, npix, npix))
+    jackknife_future = []
+    residual_futures = []
 
     @deisa.register("sumwts", "vis", "uvw_coords", "flags", "weights", "freqs")
     def process_vis(sumwts, vis, uvw_coords, flags, weights, freqs):
+        print("jackknifing")
         sumwt = sumwts[-1].sum().compute()
-
-        jackknifes_per_channel = dask.array.map_blocks(jackknife_vis[-1], vis[-1], uvw_coords[-1], flags[-1], weights[-1], freqs[-1], npix, pixsize_rad, num_jackknifes, sumwt, dtype=numpy.float64)
+        jackknifes_per_channel = dask.array.map_blocks(jackknife_vis, vis[-1], uvw_coords[-1], flags[-1], weights[-1], freqs[-1], npix, pixsize_rad, num_jackknifes, sumwt, dtype=numpy.float64)
         jackknifes = jackknifes_per_channel.sum(axis=0)
-
-        jackknifes_persisted = deisa.client.persist(jackknifes)
+        jackknife_future.append(deisa.client.compute(jackknifes))
 
     @deisa.register("residual")
     def process_resid(residual):
-        residuals[residual[-1].timestep,:,:] = residual[-1].compute().reshape((npix, npix))
+        i = residual[-1].timestep
+        print("summing residual " + str(i))
+        rsum = residual[-1].sum(axis=0).compute()
 
-    deisa.execute_callbacks()
-
-    jackknifed_images = deisa.client.compute(jackknifes_persisted).result()
-
-    util.tofits(jackknifed_images, "jackknifes.fits")
-    util.tofits(residuals, "residuals.fits")
-
-    for i in range(residuals.shape[0]):
-        curr_resid = residuals[i].reshape(1, residuals.shape[1], residuals.shape[2])
+        jackknifed_images = jackknife_future[0].result()
+        curr_resid = rsum.reshape(1, residuals.shape[1], residuals.shape[2])
         plot_stats(jackknifed_images, curr_resid, "results/plot_mc" + str(i) + ".png")
 
-    plot_stats(jackknifed_images, residuals, "results/plot_mcall.png")
+        if i == 0:
+            util.tofits(jackknifed_images, "results/jackknifes.fits")
+
+        util.tofits(curr_resid, "results/resid_" + str(i) + ".fits")
+
+    print("executing callbacks")
+    deisa.execute_callbacks()
 
 if __name__ == "__main__":
     main()

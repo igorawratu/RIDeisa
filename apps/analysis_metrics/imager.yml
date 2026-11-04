@@ -17,6 +17,7 @@ pdi:
     #trace:
     pycall:
       on_event:
+        #this only gets called by de/gridding nodes currently and not by the deconv node (rank=0). This ideally should be updated later when Deisa allows for a heterogeneous sending structure
         precompute:
           with: {img_size: $img_size, rank: $rank, nodes: $nodes, dask_address: $dask_address}
           exec: |
@@ -27,21 +28,26 @@ pdi:
 
             print(f"precompute: dask_addr={sdask_address}, img_size={img_size}")
 
-            if rank == 0:
-              print("init arrays metadata")
-              arrays_metadata = {
-                                   'reconstruction': {
-                                       'global_shape': (1, int(img_size), int(img_size)),
-                                       'chunk_shape': (1, int(img_size), int(img_size)),
-                                       'chunk_position': (0, 0, 0)
-                                   },
-                               }
+            print("init arrays metadata")
+            arrays_metadata = {
+                                 'reconstruction': {
+                                     'global_shape': (int(nodes)-1, int(img_size), int(img_size)),
+                                     'chunk_shape': (1, int(img_size), int(img_size)),
+                                     'chunk_position': (int(rank-1), 0, 0)
+                                 },
+                             }
 
-              comm = MPI.COMM_SELF
-              bridge = Bridge(comm=comm, 
-                              arrays_metadata=arrays_metadata)
+            world = MPI.COMM_WORLD
+            group = world.Get_group()
 
-        deconv_share:
+            dgranks = [x + 1 for x in range(int(nodes) - 1)]
+            dggroup = group.Incl(dgranks)
+            comm = world.Create_group(dggroup)
+
+            bridge = Bridge(comm=comm, 
+                            arrays_metadata=arrays_metadata)
+
+        recon_share:
           with: {img_size: $img_size, iter_id: $iteration, recon: $tmp_recon}
           exec: |
             recon = recon.reshape((1, int(img_size), int(img_size)))
