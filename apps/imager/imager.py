@@ -64,6 +64,9 @@ def deconv_node(comm, mscfg, pdicfg):
 
         recon[0, 0, :, :] += deconvolved
         comm.Bcast(recon, root=0)
+        continueflags = comm.allgather(0)
+        if any(continueflags) > 0:
+            break
 
     residuals = comm.gather(None, root=0)
 
@@ -146,11 +149,15 @@ def grid_node(comm, mscfg, pdicfg):
     pdi.multi_expose("residual_share", [("iteration", 0, pdi.OUT),
         ("tmp_resid", npresid, pdi.OUT)])
 
+    continueflag = np.array([0])
+
     for i in range(nmaj):
         print("degrid " + str(i))
         comm.Bcast(model.pixels.data, root=0)
         pdi.multi_expose("recon_share", [("iteration", i, pdi.OUT),
-            ("tmp_recon", model.pixels.data, pdi.OUT)])
+            ("tmp_recon", model.pixels.data, pdi.OUT), ("tmp_continueflag", continueflag, pdi.INOUT)])
+
+        continueflags = comm.allgather(continueflag[0])
 
         resid = residual.compute_residual(model, vis, npixels, cellsize)
         gc.collect()
@@ -162,8 +169,11 @@ def grid_node(comm, mscfg, pdicfg):
         pdi.multi_expose("residual_share", [("iteration", iteration, pdi.OUT),
             ("tmp_resid", npresid, pdi.OUT)])
 
-    pdi.multi_expose("recon_share", [("iteration", i, pdi.OUT),
-        ("tmp_recon", model.pixels.data, pdi.OUT)])
+        if any(continueflags) > 0:
+            break
+
+    # pdi.multi_expose("recon_share", [("iteration", i, pdi.OUT),
+    #     ("tmp_recon", model.pixels.data, pdi.OUT), ("tmp_continueflag", continueflag, pdi.INOUT)])
 
     pdi.multi_expose("postcompute", [("iteration", nmaj, pdi.OUT)])
 

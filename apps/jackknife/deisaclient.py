@@ -16,6 +16,7 @@ import astropy.units as u
 import dask
 from deisa.dask import Deisa, get_connection_info
 from dask.distributed import get_worker, Client
+from dask.distributed import performance_report
 
 import ducc0.wgridder as ng 
 
@@ -167,7 +168,8 @@ def main():
         util.tofits(curr_resid, "results/resid_" + str(i) + ".fits")
 
     print("executing callbacks")
-    deisa.execute_callbacks()
+    with performance_report(filename="results/jackknife_perf.html"):
+        deisa.execute_callbacks()
 
 if __name__ == "__main__":
     main()

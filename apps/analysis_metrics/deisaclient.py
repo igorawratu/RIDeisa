@@ -14,6 +14,7 @@ import sep
 from deisa.dask import Deisa, get_connection_info
 import dask
 from dask.distributed import get_worker, Client
+from dask.distributed import performance_report
 
 import matplotlib.pyplot as plt
 from matplotlib.patches import Ellipse
@@ -255,6 +256,23 @@ def write_sources(sources, output_file):
 
             util.write_to_csv([sources[i,j,0], sources[i,j,1], sources[i,j,2], sources[i,j,3], sources[i,j,4], sources[i,j,5], sources[i,j,6], sources[i,j,7]], curr_output_file)
 
+def compute_errors(lflux_ratios, lpflux_ratios, lpoffset_dists):
+    fluxrat_err = 0
+    pfluxrat_err = 0
+    offsetdist_err = 0
+    pifluxrat_err = 0
+
+    for i in range(lflux_ratios[-1].shape[1]):
+        fluxrat = lflux_ratios[-1][0,i]
+        pfluxrat = lpflux_ratios[-1][0,i]
+        offsetdist = lpoffset_dists[-1][0,i]
+
+        fluxrat_err += numpy.abs(1 - fluxrat)
+        pfluxrat_err += numpy.abs(1 - pfluxrat)
+        offsetdist_err += offsetdist
+
+    return fluxrat_err,pfluxrat_err,offsetdist_err
+
 def main():
     pdicfg_filename = sys.argv[1]
     pdicfg = None
@@ -278,19 +296,30 @@ def main():
     
     match_thresh = pdicfg["match_threshold"]
 
+    err_thresh = pdicfg["err_threshold"]
+
     gt_sources = util.read_csv(gt_sources_fname, separate_rows=True)[1:]
     gt_sources = [[float(x) for x in row] for row in gt_sources]
 
     print("deisa init")
 
     deisa_client = Deisa()
-    source_futures = []
-    models = []
+
+    lmatches = []
+    lflux_ratios = []
+    lpflux_ratios = []
+    lpoffset_ys = []
+    lpoffset_xs = []
+    lpoffset_dists = []
+    lpiflux_ratios = []
+
+    errors = []
 
     @deisa_client.register("reconstruction")
     def process_recon(reconstruction):
         drecon = reconstruction[-1]
         i = drecon.timestep
+        
         print("analysing recon " + str(i))
         first = drecon[:1]
         drecon_sources = first.map_blocks(find_sources, sthresh, max_sources, dtype=numpy.float32)
@@ -306,6 +335,23 @@ def main():
 
         model, recon_sources, matches, flux_ratios, pflux_ratios, poffset_ys, poffset_xs, poffset_dists, piflux_ratios = \
             dask.compute(first, drecon_sources, dmatches, dflux_ratios, dpflux_ratios, dpoffset_ys, dpoffset_xs, dpoffset_dists, dpiflux_ratios)
+
+        lmatches.append(matches)
+        lflux_ratios.append(flux_ratios)
+        lpflux_ratios.append(pflux_ratios)
+        lpoffset_ys.append(poffset_ys)
+        lpoffset_xs.append(poffset_xs)
+        lpoffset_dists.append(poffset_dists)
+        lpiflux_ratios.append(piflux_ratios)
+
+        fluxerr, pfluxerr, offsetdisterr = compute_errors(lflux_ratios, lpflux_ratios, lpoffset_dists)
+        errors.append([fluxerr, pfluxerr, offsetdisterr])
+        if len(errors) > 1:
+            errdifs = [numpy.abs(errors[-1][i] - errors[-2][i]) for i in range(3)]
+            threshs = [numpy.abs(errors[-1][i] - errors[-2][i]) < err_thresh[i] for i in range(3)]
+
+            if all(threshs):
+                deisa_client.set("stop", True, timestep=i)
 
         write_sources(recon_sources, "results/recon_sources_" + str(i))
         plot_sources(recon_sources, gt_sources, matches, model, "results/recon_sources_" + str(i))
@@ -323,7 +369,8 @@ def main():
         plt.clf()
 
     print("deisa executing callbacks")
-    deisa_client.execute_callbacks()
+    with performance_report(filename="results/analysis_metrics_perf.html"):
+        deisa_client.execute_callbacks()
 
 if __name__ == "__main__":
     main()
